@@ -1,13 +1,17 @@
 from google import genai
-from google.genai import types
 from code import run_pipeline
 
-DEFAULT_GEMINI_API_KEY = 'AQ.Ab8RN6KSD06Tsd7ox3EXSlREyEb4GFwhZ7gulVpoBsL50dBjwg'
+DEFAULT_GEMINI_API_KEY = ""  # Set via Streamlit Secrets (GEMINI_API_KEY) or the sidebar
+
+# Max characters to send (~750k tokens at ~4 chars/token, well within the 1M token limit)
+MAX_CONTENT_CHARS = 3_000_000
 
 
 def ask_gemini(file_path: str, user_question: str, api_key: str = DEFAULT_GEMINI_API_KEY) -> str:
     """
-    Upload a transcript file to Gemini and ask a question about it.
+    Read a transcript file and ask Gemini a question about it.
+    Content is passed directly in the prompt to avoid Files API authentication
+    issues (ACCESS_TOKEN_TYPE_UNSUPPORTED) in Streamlit Cloud deployments.
 
     Args:
         file_path:     Path to the local transcript text file.
@@ -17,22 +21,25 @@ def ask_gemini(file_path: str, user_question: str, api_key: str = DEFAULT_GEMINI
     Returns:
         Gemini's response as a string, or an error message.
     """
+    if not api_key:
+        raise ValueError("Gemini API key is required.")
+
     client = genai.Client(api_key=api_key)
 
-    uploaded_file = client.files.upload(
-        file=file_path,
-        config=types.UploadFileConfig(mime_type="text/plain")
-    )
+    with open(file_path, "r", encoding="utf-8") as f:
+        file_content = f.read()
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=[user_question, uploaded_file]
-        )
-        return response.text
-    finally:
-        # Always clean up the uploaded file from Google's servers
-        client.files.delete(name=uploaded_file.name)
+    # Truncate if extremely large to stay within token limits
+    if len(file_content) > MAX_CONTENT_CHARS:
+        file_content = file_content[:MAX_CONTENT_CHARS] + "\n\n[Content truncated due to size]"
+
+    prompt = f"Here is the transcript content:\n\n{file_content}\n\n---\n\nQuestion: {user_question}"
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=[prompt]
+    )
+    return response.text
 
 
 def main():
@@ -40,7 +47,7 @@ def main():
     user_question = 'What is my name?'
 
     try:
-        print(f"📤 Uploading {file_path} to Gemini API...")
+        print(f"📄 Reading {file_path} for Gemini API...")
         answer = ask_gemini(file_path, user_question)
         print("\n✨ Gemini's Response:")
         print(answer)
